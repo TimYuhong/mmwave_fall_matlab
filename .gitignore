@@ -1,0 +1,89 @@
+# =========================
+# OS / file explorer noise
+# =========================
+.DS_Store
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# =========================
+# Editor / IDE
+# =========================
+.vscode/
+.idea/
+*.code-workspace
+
+# =========================
+# Python environments
+# =========================
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.python-version
+.venv/
+venv/
+env/
+ENV/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# =========================
+# Logs / temp / cache
+# =========================
+*.log
+*.tmp
+*.temp
+*.bak
+*.swp
+*.swo
+tmp/
+temp/
+cache/
+logs/
+
+# =========================
+# MATLAB generated files
+# =========================
+*.asv
+*.autosave
+*.mexa64
+*.mexw64
+*.mexmaci64
+slprj/
+codegen/
+simulink_cache/
+*.slxc
+
+# =========================
+# Radar / training outputs
+# Keep source code and cfg files, ignore generated artifacts and large data.
+# =========================
+outputs/
+results/
+artifacts/
+exports/
+figures/
+checkpoints/
+runs/
+
+*.mat
+*.fig
+
+# Raw capture and dataset files
+*.bin
+*.raw
+*.npy
+*.npz
+*.h5
+*.hdf5
+*.csv
+
+# Archives
+*.zip
+*.7z
+*.rar
+*.tar
+*.gz
