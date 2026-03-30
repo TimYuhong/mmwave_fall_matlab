@@ -59,7 +59,7 @@ function visual_results = main_visual_demo(input_path)
         angle_products.azimuth_axis_deg, display_frame_idx, visual_cfg, file_label);
     fig_re = show_re_map(angle_products.range_elevation_map, angle_products.range_axis_m, ...
         angle_products.elevation_axis_deg, display_frame_idx, visual_cfg, file_label);
-    fig_pc = show_point_cloud_frame(frame_result, display_frame_idx, file_label);
+    fig_pc = show_point_cloud_frame(frame_result, display_frame_idx, file_label, visual_cfg);
 
     if visual_cfg.save_figures
         if exist(visual_cfg.output_dir, 'dir') ~= 7
