@@ -10,9 +10,16 @@ function fig = show_micro_doppler_map(micro_doppler_map, time_axis_s, doppler_ax
     display_map = micro_doppler_map;
     colorbar_label = 'Amplitude Sum';
 
+    normalization_method = 'max';
+    if isfield(visual_cfg, 'normalization_method') && ~isempty(visual_cfg.normalization_method)
+        normalization_method = lower(visual_cfg.normalization_method);
+    end
+
     if isfield(visual_cfg, 'enable_normalization') && visual_cfg.enable_normalization
         display_map = local_normalize_map(display_map, visual_cfg);
-        colorbar_label = 'Normalized Amplitude';
+        if ~strcmp(normalization_method, 'none')
+            colorbar_label = 'Normalized Amplitude';
+        end
     end
 
     fig = figure('Name', 'Micro-Doppler Map', 'Color', 'w');
@@ -38,6 +45,8 @@ function normalized_map = local_normalize_map(input_map, visual_cfg)
     switch lower(visual_cfg.normalization_method)
         case 'max'
             scale = max(abs(input_map(:)));
+        case 'none'
+            scale = 0;
         otherwise
             error('show_micro_doppler_map:UnsupportedNormalization', ...
                 '不支持的归一化方式：%s', visual_cfg.normalization_method);

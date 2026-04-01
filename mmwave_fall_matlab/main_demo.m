@@ -1,38 +1,30 @@
 function results = main_demo(input_path)
-%MAIN_DEMO mmWave 跌倒场景动静融合点云主流程示例。
-% 函数签名：
+%MAIN_DEMO Process DCA1000 data up to Doppler FFT only.
 %   results = main_demo(input_path)
 %
-% 输入：
-%   input_path : char/string，可选
-%       1. 单个 DCA1000 原始 ADC bin 文件路径
-%       2. 包含多个 bin 文件的目录路径
+%   Input:
+%     input_path
+%       1. path to a single DCA1000 raw ADC .bin file
+%       2. path to a directory that contains multiple .bin files
 %
-% 输出：
-%   results : struct
-%       results.mode         : 'single_file' 或 'directory'
-%       results.input_path   : 实际输入路径
-%       results.file_results : 每个文件对应一个结果结构体
-%
-% main_demo.m 中的新调用示例：
-%   mimo_cube = deinterleave_tdm_mimo(frame_cube, radar_cfg);
-%   [point_cloud, mpoint_debug] = gen_pointcloud_comprehensive_mpoint( ...
-%       mimo_cube, radar_cfg, antenna_layout, mpoint_cfg, aoa_cfg);
-%   [filtered_cloud, ~] = prefilter_human_roi(point_cloud, cluster_cfg);
-%   [cluster_result, human_cloud, track_state] = cluster_dbscan_human( ...
-%       filtered_cloud, cluster_cfg, track_state);
-%   voxel_map = build_voxel_confidence_map(history_human_clouds, stable_cfg);
-%   stable_cloud = voxel_map.stable_cloud;
+%   Output:
+%     results.mode
+%     results.input_path
+%     results.radar_cfg
+%     results.pipeline
+%     results.file_results(k).adc_stream
+%     results.file_results(k).frames(frame_idx).adc_frame_cube
+%     results.file_results(k).frames(frame_idx).mimo_cube
+%     results.file_results(k).frames(frame_idx).range_cube
+%     results.file_results(k).frames(frame_idx).clutter_free_cube
+%     results.file_results(k).frames(frame_idx).rd_cube
+%     results.file_results(k).frames(frame_idx).rd_power_map
+%     results.file_results(k).frames(frame_idx).rd_amplitude_map
 
     project_root = fileparts(mfilename('fullpath'));
     addpath(genpath(project_root));
 
     radar_cfg = radar_config(fullfile(project_root, 'config', 'Radar.cfg'));
-    aoa_cfg = aoa_config();
-    mpoint_cfg = mpoint_config(radar_cfg);
-    cluster_cfg = cluster_config();
-    stable_cfg = stable_config();
-    antenna_layout = get_isk_antenna_layout(radar_cfg);
 
     if nargin < 1 || isempty(input_path)
         input_path = 'F:\Data_bin\parlor\fall\fall_S01_parlor_34_Raw_0.bin';
@@ -51,7 +43,7 @@ function results = main_demo(input_path)
         bin_listing = dir(fullfile(input_path, '*.bin'));
         if isempty(bin_listing)
             error('main_demo:NoBinInDirectory', ...
-                '目录中未找到 bin 文件：%s', input_path);
+                'No .bin file was found in directory: %s', input_path);
         end
         [~, order] = sort({bin_listing.name});
         bin_listing = bin_listing(order);
@@ -62,72 +54,56 @@ function results = main_demo(input_path)
         result_mode = 'single_file';
     else
         error('main_demo:InvalidInputPath', ...
-            ['输入路径不存在：', input_path, newline, ...
-             '请传入 bin 文件路径，或包含多个 bin 的目录路径。']);
+            ['Input path does not exist: ', input_path, newline, ...
+             'Please pass a .bin file path or a directory that contains .bin files.']);
     end
 
     results = struct();
     results.mode = result_mode;
     results.input_path = input_path;
+    results.radar_cfg = radar_cfg;
+    results.pipeline = { ...
+        'read_dca1000_adc', ...
+        'reshape_frame_cube', ...
+        'deinterleave_tdm_mimo', ...
+        'range_fft', ...
+        'static_clutter_remove', ...
+        'doppler_fft'};
     results.file_results = repmat(struct( ...
         'file_path', '', ...
         'file_name', '', ...
         'num_frames', 0, ...
+        'num_adc_complex_samples', 0, ...
+        'adc_stream', complex(zeros(0, 1)), ...
+        'range_axis_m', zeros(0, 1), ...
+        'doppler_axis_mps', zeros(0, 1), ...
         'frames', struct([])), numel(bin_files), 1);
+
+    range_axis_m = range_bin_to_meters((1:radar_cfg.fft.range_fft_size).', radar_cfg);
+    doppler_axis_mps = doppler_bin_to_mps((1:radar_cfg.fft.doppler_fft_size).', radar_cfg);
 
     for file_idx = 1:numel(bin_files)
         current_bin = bin_files{file_idx};
         [adc_stream, num_frames] = read_dca1000_adc(current_bin, radar_cfg);
         frame_cubes = reshape_frame_cube(adc_stream, radar_cfg);
 
-        frame_results = repmat(struct( ...
-            'frame_id', 0, ...
-            'detection_list', zeros(0, 6), ...
-            'point_cloud', local_empty_point_cloud(), ...
-            'filtered_cloud', local_empty_point_cloud(), ...
-            'cluster_result', struct(), ...
-            'human_cloud', local_empty_human_cloud(), ...
-            'stable_cloud', local_empty_stable_cloud(), ...
-            'voxel_map', struct(), ...
-            'mpoint_debug', struct()), num_frames, 1);
-
-        history_human_clouds = cell(0, 1);
-        track_state = struct('is_valid', false, 'centroid', [NaN, NaN, NaN]);
+        frame_results = repmat(local_empty_frame_result(), num_frames, 1);
 
         for frame_idx = 1:num_frames
-            frame_cube = frame_cubes(:, :, :, frame_idx);   % [sample, rx, chirp]
-            mimo_cube = deinterleave_tdm_mimo(frame_cube, radar_cfg);
-
-            [point_cloud, mpoint_debug] = gen_pointcloud_comprehensive_mpoint( ...
-                mimo_cube, radar_cfg, antenna_layout, mpoint_cfg, aoa_cfg);
-
-            [filtered_cloud, ~] = prefilter_human_roi(point_cloud, cluster_cfg);
-            [cluster_result, human_cloud, track_state] = cluster_dbscan_human( ...
-                filtered_cloud, cluster_cfg, track_state);
-
-            history_human_clouds = [history_human_clouds; {human_cloud}]; %#ok<AGROW>
-            if numel(history_human_clouds) > stable_cfg.window_length_frames
-                history_human_clouds = history_human_clouds(end - stable_cfg.window_length_frames + 1:end);
-            end
-
-            voxel_map = build_voxel_confidence_map(history_human_clouds, stable_cfg);
-            stable_cloud = voxel_map.stable_cloud;
-
-            frame_results(frame_idx).frame_id = frame_idx;
-            frame_results(frame_idx).detection_list = mpoint_debug.dynamic_candidate_list;
-            frame_results(frame_idx).point_cloud = point_cloud;
-            frame_results(frame_idx).filtered_cloud = filtered_cloud;
-            frame_results(frame_idx).cluster_result = cluster_result;
-            frame_results(frame_idx).human_cloud = human_cloud;
-            frame_results(frame_idx).stable_cloud = stable_cloud;
-            frame_results(frame_idx).voxel_map = voxel_map;
-            frame_results(frame_idx).mpoint_debug = mpoint_debug;
+            adc_frame_cube = frame_cubes(:, :, :, frame_idx);
+            frame_result = local_process_frame_until_2dfft(adc_frame_cube, radar_cfg);
+            frame_result.frame_id = frame_idx;
+            frame_results(frame_idx) = frame_result;
         end
 
         [~, file_name, file_ext] = fileparts(current_bin);
         results.file_results(file_idx).file_path = current_bin;
         results.file_results(file_idx).file_name = [file_name, file_ext];
         results.file_results(file_idx).num_frames = num_frames;
+        results.file_results(file_idx).num_adc_complex_samples = numel(adc_stream);
+        results.file_results(file_idx).adc_stream = adc_stream;
+        results.file_results(file_idx).range_axis_m = range_axis_m;
+        results.file_results(file_idx).doppler_axis_mps = doppler_axis_mps;
         results.file_results(file_idx).frames = frame_results;
     end
 
@@ -136,55 +112,66 @@ function results = main_demo(input_path)
     end
 end
 
-function point_cloud = local_empty_point_cloud()
-    point_cloud = struct();
-    point_cloud.points = zeros(0, 7);
-    point_cloud.xyz = zeros(0, 3);
-    point_cloud.v_mps = zeros(0, 1);
-    point_cloud.snr_db = zeros(0, 1);
-    point_cloud.intensity = zeros(0, 1);
-    point_cloud.source_flag = zeros(0, 1);
-    point_cloud.range_m = zeros(0, 1);
-    point_cloud.azimuth_deg = zeros(0, 1);
-    point_cloud.elevation_deg = zeros(0, 1);
-    point_cloud.range_bin = zeros(0, 1);
-    point_cloud.doppler_bin = zeros(0, 1);
-    point_cloud.doppler_mps = zeros(0, 1);
-    point_cloud.power_linear = zeros(0, 1);
-    point_cloud.power_db = zeros(0, 1);
+function frame_result = local_process_frame_until_2dfft(adc_frame_cube, radar_cfg)
+    mimo_cube = deinterleave_tdm_mimo(adc_frame_cube, radar_cfg);
+
+    [range_cube, ~] = range_fft(mimo_cube, struct( ...
+        'fft_size', radar_cfg.fft.range_fft_size, ...
+        'window_type', radar_cfg.fft.range_window));
+
+    clutter_free_cube = static_clutter_remove(range_cube, struct('method', 'mean'));
+
+    [rd_cube, ~] = doppler_fft(clutter_free_cube, struct( ...
+        'fft_size', radar_cfg.fft.doppler_fft_size, ...
+        'window_type', radar_cfg.fft.doppler_window, ...
+        'apply_shift', true));
+
+    rd_power_map = squeeze(sum(sum(abs(rd_cube).^2, 4), 3));
+    rd_amplitude_map = sqrt(max(rd_power_map, 0));
+
+    frame_result = struct( ...
+        'frame_id', 0, ...
+        'adc_frame_cube', adc_frame_cube, ...
+        'mimo_cube', mimo_cube, ...
+        'range_cube', range_cube, ...
+        'clutter_free_cube', clutter_free_cube, ...
+        'rd_cube', rd_cube, ...
+        'rd_power_map', rd_power_map, ...
+        'rd_amplitude_map', rd_amplitude_map);
 end
 
-function human_cloud = local_empty_human_cloud()
-    human_cloud = local_empty_point_cloud();
-    human_cloud.label = -1;
-    human_cloud.centroid = [NaN, NaN, NaN];
-    human_cloud.bbox = nan(2, 3);
-end
-
-function stable_cloud = local_empty_stable_cloud()
-    stable_cloud = struct();
-    stable_cloud.xyz = zeros(0, 3);
-    stable_cloud.confidence = zeros(0, 1);
-    stable_cloud.hit_count = zeros(0, 1);
-    stable_cloud.num_valid_frames = 0;
-    stable_cloud.reference_center = [NaN, NaN, NaN];
+function frame_result = local_empty_frame_result()
+    frame_result = struct( ...
+        'frame_id', 0, ...
+        'adc_frame_cube', [], ...
+        'mimo_cube', [], ...
+        'range_cube', [], ...
+        'clutter_free_cube', [], ...
+        'rd_cube', [], ...
+        'rd_power_map', [], ...
+        'rd_amplitude_map', []);
 end
 
 function local_print_main_demo_summary(results)
     fprintf('\nmain_demo completed\n');
     fprintf('mode: %s\n', results.mode);
     fprintf('input: %s\n', results.input_path);
+    fprintf('pipeline: %s\n', strjoin(results.pipeline, ' -> '));
 
     for file_idx = 1:numel(results.file_results)
         file_result = results.file_results(file_idx);
-        det_count = arrayfun(@(f) size(f.detection_list, 1), file_result.frames);
-        point_count = arrayfun(@(f) size(f.point_cloud.xyz, 1), file_result.frames);
-        human_count = arrayfun(@(f) size(f.human_cloud.xyz, 1), file_result.frames);
-        stable_count = arrayfun(@(f) size(f.stable_cloud.xyz, 1), file_result.frames);
+        max_rd_energy = 0;
 
-        fprintf('[%d] %s | frames=%d | det_frames=%d | max_points=%d | max_human=%d | max_stable=%d\n', ...
-            file_idx, file_result.file_name, file_result.num_frames, nnz(det_count > 0), ...
-            max(point_count, [], 'omitnan'), max(human_count, [], 'omitnan'), max(stable_count, [], 'omitnan'));
+        if ~isempty(file_result.frames)
+            frame_energy = arrayfun(@(f) sum(f.rd_power_map(:)), file_result.frames);
+            max_rd_energy = max(frame_energy);
+        end
+
+        fprintf('[%d] %s | frames=%d | adc_samples=%d | rd_bins=%dx%d | max_rd_energy=%.3e\n', ...
+            file_idx, file_result.file_name, file_result.num_frames, ...
+            file_result.num_adc_complex_samples, ...
+            numel(file_result.range_axis_m), numel(file_result.doppler_axis_mps), ...
+            max_rd_energy);
     end
 
     fprintf('\n');
