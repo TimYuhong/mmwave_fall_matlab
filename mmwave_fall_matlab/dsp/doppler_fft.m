@@ -59,20 +59,19 @@ function [rd_cube, doppler_bin_axis] = doppler_fft(slow_time_cube, fft_cfg)
 end
 
 function win = local_make_window(window_type, n)
-    k = (0:n-1).';
     switch lower(string(window_type))
         case "hann"
-            win = 0.5 - 0.5 * cos(2 * pi * k / max(n - 1, 1));
+            win = hann(n);
         case "hamming"
-            win = 0.54 - 0.46 * cos(2 * pi * k / max(n - 1, 1));
+            win = hamming(n);
         case "blackman"
-            win = 0.42 ...
-                - 0.50 * cos(2 * pi * k / max(n - 1, 1)) ...
-                + 0.08 * cos(4 * pi * k / max(n - 1, 1));
+            win = blackman(n);
         case {"rect", "rectwin", "none"}
-            win = ones(n, 1);
+            win = rectwin(n);
         otherwise
             error('doppler_fft:UnsupportedWindow', ...
                 '不支持的 Doppler 窗函数类型：%s', window_type);
     end
+
+    win = win(:);
 end

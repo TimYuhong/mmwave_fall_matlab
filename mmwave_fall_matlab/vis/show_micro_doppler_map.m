@@ -1,29 +1,27 @@
 function fig = show_micro_doppler_map(micro_doppler_map, time_axis_s, doppler_axis_mps, visual_cfg, file_label)
 %SHOW_MICRO_DOPPLER_MAP 显示微多普勒图。
-% 输入：
-%   micro_doppler_map : [doppler, frame]
-%   time_axis_s       : [frame, 1]
-%   doppler_axis_mps  : [doppler, 1]
-%   visual_cfg        : visual_config.m 输出
-%   file_label        : 图标题用文件名
+%   输入：
+%     micro_doppler_map : [doppler, frame]
+%     time_axis_s : [frame, 1]
+%     doppler_axis_mps : [doppler, 1]
+%     visual_cfg : visual_config.m 输出
+%     file_label : 图标题使用的文件名
+%
+%   当前默认显示策略为 dB 显示加自适应动态范围。
 
     display_map = micro_doppler_map;
     colorbar_label = 'Amplitude Sum';
 
-    normalization_method = 'max';
-    if isfield(visual_cfg, 'normalization_method') && ~isempty(visual_cfg.normalization_method)
-        normalization_method = lower(visual_cfg.normalization_method);
+    if isfield(visual_cfg, 'display_in_db') && visual_cfg.display_in_db
+        display_map = local_to_db(display_map);
+        display_map = display_map - max(display_map(:));
+        colorbar_label = 'Power (dB)';
     end
 
-    if isfield(visual_cfg, 'enable_normalization') && visual_cfg.enable_normalization
-        display_map = local_normalize_map(display_map, visual_cfg);
-        if ~strcmp(normalization_method, 'none')
-            colorbar_label = 'Normalized Amplitude';
-        end
-    end
+    [cmin, cmax] = local_get_display_limits(display_map, visual_cfg);
 
     fig = figure('Name', 'Micro-Doppler Map', 'Color', 'w');
-    imagesc(time_axis_s, doppler_axis_mps, display_map);
+    imagesc(time_axis_s, doppler_axis_mps, display_map, [cmin, cmax]);
     axis xy;
     xlabel('Time (s)');
     ylabel('Doppler Velocity (m/s)');
@@ -34,25 +32,43 @@ function fig = show_micro_doppler_map(micro_doppler_map, time_axis_s, doppler_ax
     grid on;
 end
 
-function normalized_map = local_normalize_map(input_map, visual_cfg)
-% 仅用于显示层归一化，不修改微多普勒原始积分结果。
-    normalized_map = input_map;
+function map_db = local_to_db(input_map)
+    map_db = 20 * log10(max(abs(input_map), eps));
+end
 
-    if isempty(input_map)
+function [cmin, cmax] = local_get_display_limits(display_map, visual_cfg)
+    if isempty(display_map)
+        cmin = 0;
+        cmax = 1;
         return;
     end
 
-    switch lower(visual_cfg.normalization_method)
-        case 'max'
-            scale = max(abs(input_map(:)));
-        case 'none'
-            scale = 0;
-        otherwise
-            error('show_micro_doppler_map:UnsupportedNormalization', ...
-                '不支持的归一化方式：%s', visual_cfg.normalization_method);
-    end
+    cmax = max(display_map(:));
 
-    if scale > 0
-        normalized_map = input_map ./ scale;
+    if isfield(visual_cfg, 'adaptive_dynamic_range') && visual_cfg.adaptive_dynamic_range
+        valid_values = display_map(isfinite(display_map));
+        if isempty(valid_values)
+            cmin = cmax - 60;
+            return;
+        end
+
+        percentile = 5;
+        if isfield(visual_cfg, 'dynamic_range_percentile') && ~isempty(visual_cfg.dynamic_range_percentile)
+            percentile = visual_cfg.dynamic_range_percentile;
+        end
+
+        floor_db = -60;
+        if isfield(visual_cfg, 'dynamic_range_floor_db') && ~isempty(visual_cfg.dynamic_range_floor_db)
+            floor_db = visual_cfg.dynamic_range_floor_db;
+        end
+
+        cmin = prctile(valid_values, percentile);
+        cmin = max(cmin, floor_db);
+    else
+        if isfield(visual_cfg, 'display_in_db') && visual_cfg.display_in_db
+            cmin = -60;
+        else
+            cmin = min(display_map(:));
+        end
     end
 end

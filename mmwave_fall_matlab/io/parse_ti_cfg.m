@@ -22,6 +22,7 @@ function raw = parse_ti_cfg(cfg_path)
     raw.profile = struct();
     raw.frame = struct();
     raw.adcbuf = struct('sample_swap', 1, 'channel_interleave', 1);
+    raw.aoa = struct('azimuth_fov_deg', [], 'elevation_fov_deg', []);
 
     chirp_table = [];
 
@@ -72,6 +73,16 @@ function raw = parse_ti_cfg(cfg_path)
                 if numel(tokens) >= 5
                     raw.adcbuf.sample_swap = str2double(tokens(4));
                     raw.adcbuf.channel_interleave = str2double(tokens(5));
+                end
+
+            case "aoaFovCfg"
+                if numel(tokens) >= 6
+                    raw.aoa.azimuth_fov_deg = [ ...
+                        str2double(tokens(3)), ...
+                        str2double(tokens(4))];
+                    raw.aoa.elevation_fov_deg = [ ...
+                        str2double(tokens(5)), ...
+                        str2double(tokens(6))];
                 end
         end
     end

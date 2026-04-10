@@ -10,13 +10,19 @@ function visual_products = compute_visual_products(input_path, radar_cfg, visual
 %
 % 输出：
 %   visual_products : struct
-%       .rd_amplitude_maps  [range, doppler, frame]
-%       .micro_doppler_map  [doppler, frame]
+%       .rd_amplitude_maps  [range, doppler, frame]，逐帧 RD 幅度图
+%       .micro_doppler_map  [doppler, frame]，全距离积分微多普勒
 %       .range_axis_m       [range, 1]
 %       .doppler_axis_mps   [doppler, 1]
 %       .time_axis_s        [frame, 1]
 %       .range_roi_bins     [1, 2]
 %       .num_frames         标量
+%
+% 说明：
+%   1) 静态杂波去除使用 loops 平均（慢时间均值去除）；
+%   2) RD 图保留逐帧结果；
+%   3) 微多普勒采用全距离积分，而不是 ROI 积分；
+%   4) dB 与自适应动态范围在显示函数中处理，不在此处改写原始幅度数据。
 
     [adc_stream, num_frames] = read_dca1000_adc(input_path, radar_cfg);
     frame_cubes = reshape_frame_cube(adc_stream, radar_cfg);
@@ -50,6 +56,7 @@ function visual_products = compute_visual_products(input_path, radar_cfg, visual
             'fft_size', radar_cfg.fft.range_fft_size, ...
             'window_type', radar_cfg.fft.range_window));
 
+        % 静态杂波去除：对 loops 维做均值去除
         clutter_free_cube = static_clutter_remove(range_cube, struct('method', 'mean'));
 
         [rd_cube, ~] = doppler_fft(clutter_free_cube, struct( ...
@@ -61,8 +68,8 @@ function visual_products = compute_visual_products(input_path, radar_cfg, visual
         rd_amplitude_map = sqrt(max(rd_power_map, 0));
         rd_amplitude_maps(:, :, frame_idx) = rd_amplitude_map;
 
-        % 简化假设：微多普勒图通过对指定距离 ROI 上的 RD 原始幅度做积分获得。
-        micro_doppler_map(:, frame_idx) = sum(rd_amplitude_map(range_mask, :), 1).';
+        % 微多普勒：对全距离维积分，而非仅对 ROI 积分。
+        micro_doppler_map(:, frame_idx) = sum(rd_amplitude_map, 1).';
     end
 
     visual_products = struct();

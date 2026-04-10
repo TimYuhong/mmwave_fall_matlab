@@ -1,38 +1,24 @@
 function cfg = radar_config(cfg_path)
-%RADAR_CONFIG 解析 TI Radar.cfg，并生成项目统一雷达参数结构体。
+%RADAR_CONFIG 解析 TI Radar.cfg，并构建统一的雷达配置结构体。
+%   输入：
+%     cfg_path : char/string
+%       TI mmWave Studio 或 SDK 导出的配置文件路径。
 %
-% 输入：
-%   cfg_path : char/string
-%       TI mmWave Studio / SDK 导出的配置文件路径。
-%
-% 输出：
-%   cfg : struct
-%       统一雷达配置，关键字段如下：
+%   输出：
+%     cfg : struct
 %       cfg.source.ti_cfg_path
-%       cfg.frame.num_rx
-%       cfg.frame.num_tx
-%       cfg.frame.num_loops
-%       cfg.frame.num_chirps_per_frame
-%       cfg.frame.actual_tx_order
-%       cfg.frame.aoa_tx_order
-%       cfg.frame.rx_order
-%       cfg.rf.start_freq_ghz
-%       cfg.rf.lambda_m
-%       cfg.rf.freq_slope_hz_s
-%       cfg.rf.num_adc_samples
-%       cfg.rf.sample_rate_hz
-%       cfg.fft.range_fft_size
-%       cfg.fft.doppler_fft_size
-%       cfg.metrics.range_resolution_m
-%       cfg.metrics.max_range_m
-%       cfg.metrics.doppler_resolution_mps
-%       cfg.metrics.max_velocity_mps
-%       cfg.io.complex_sample_order
-%       cfg.io.frame_cube_shape
+%       cfg.frame.*
+%       cfg.rf.*
+%       cfg.fft.*
+%       cfg.metrics.*
+%       cfg.mount.*
+%       cfg.aoa.*
+%       cfg.io.*
 %
-% 说明：
-%   1. 本函数严格依据当前 Radar.cfg 的参数推导，不引入额外传感器假设。
-%   2. AoA 前统一使用 [TX1, TX2, TX3] 的虚拟通道组顺序。
+%   说明：
+%     1. 所有参数都从当前这份 Radar.cfg 推导得到。
+%     2. IWR6843ISK 的虚拟阵列会按实际 TX 时隙顺序重排，以便和
+%        deinterleave_tdm_mimo 之后的 channel_response(:) 顺序一致。
 
     if nargin < 1 || isempty(cfg_path)
         project_root = fileparts(fileparts(mfilename('fullpath')));
@@ -87,6 +73,17 @@ function cfg = radar_config(cfg_path)
     cfg.metrics.max_velocity_mps = cfg.rf.lambda_m / ...
         (4 * cfg.frame.num_tx * cfg.rf.chirp_period_us * 1e-6);
 
+    cfg.mount = struct();
+    cfg.mount.height_m = 2.0;
+    cfg.mount.pitch_down_deg = 15.0;
+    cfg.mount.position_world_m = [0; 0; cfg.mount.height_m];
+    cfg.mount.frame_convention = ...
+        '世界坐标：x 为水平方位向，y 为水平前向，z 为竖直向上；原点在雷达到地面的垂足';
+
+    cfg.aoa = local_build_iwr6843isk_aoa_cfg(cfg, raw);
+    cfg.array_geometry = cfg.aoa.array_geometry;
+    cfg.scan_cfg = cfg.aoa.scan_cfg;
+
     cfg.io = struct();
     cfg.io.sample_swap = raw.adcbuf.sample_swap;
     cfg.io.channel_interleave = raw.adcbuf.channel_interleave;
@@ -96,4 +93,84 @@ function cfg = radar_config(cfg_path)
     cfg.io.frame_cube_shape = [cfg.rf.num_adc_samples, ...
                                cfg.frame.num_rx, ...
                                cfg.frame.num_chirps_per_frame];
+end
+
+function aoa_cfg = local_build_iwr6843isk_aoa_cfg(cfg, raw)
+    lambda_half_m = cfg.rf.lambda_m / 2;
+
+    % IWR6843ISK 的标准虚拟阵列，单位为 lambda/2，对应 [TX1, TX2, TX3]。
+    canonical_x_hlambda = [ ...
+        0, 1, 2, 3, ...
+        2, 3, 4, 5, ...
+        4, 5, 6, 7];
+    canonical_z_hlambda = [ ...
+        0, 0, 0, 0, ...
+        1, 1, 1, 1, ...
+        0, 0, 0, 0];
+    canonical_tx_ids = [ ...
+        ones(1, cfg.frame.num_rx), ...
+        2 * ones(1, cfg.frame.num_rx), ...
+        3 * ones(1, cfg.frame.num_rx)];
+    canonical_rx_ids = repmat(1:cfg.frame.num_rx, 1, cfg.frame.num_tx);
+
+    reorder_index = zeros(1, numel(canonical_tx_ids));
+    write_offset = 0;
+    for slot_idx = 1:numel(cfg.frame.actual_tx_order)
+        tx_id = cfg.frame.actual_tx_order(slot_idx);
+        block_index = find(canonical_tx_ids == tx_id);
+        reorder_index(write_offset + (1:numel(block_index))) = block_index;
+        write_offset = write_offset + numel(block_index);
+    end
+
+    slot_x_hlambda = canonical_x_hlambda(reorder_index).';
+    slot_z_hlambda = canonical_z_hlambda(reorder_index).';
+    slot_tx_ids = canonical_tx_ids(reorder_index).';
+    slot_rx_ids = canonical_rx_ids(reorder_index).';
+
+    azimuth_fov_deg = [-60, 60];
+    elevation_fov_deg = [-15, 15];
+    if isfield(raw, 'aoa')
+        if ~isempty(raw.aoa.azimuth_fov_deg)
+            azimuth_fov_deg = double(raw.aoa.azimuth_fov_deg);
+        end
+        if ~isempty(raw.aoa.elevation_fov_deg)
+            elevation_fov_deg = double(raw.aoa.elevation_fov_deg);
+        end
+    end
+
+    aoa_cfg = struct();
+    aoa_cfg.board_name = 'IWR6843ISK';
+    aoa_cfg.azimuth_fov_deg = azimuth_fov_deg;
+    aoa_cfg.elevation_fov_deg = elevation_fov_deg;
+    aoa_cfg.tx_time_offsets_s = (0:cfg.frame.num_tx-1) * cfg.rf.chirp_period_us * 1e-6;
+    aoa_cfg.scan_cfg = struct( ...
+        'azimuth_grid_deg', azimuth_fov_deg(1):2:azimuth_fov_deg(2), ...
+        'elevation_grid_deg', elevation_fov_deg(1):2:elevation_fov_deg(2));
+    aoa_cfg.array_geometry = struct( ...
+        'element_positions_m', [ ...
+            slot_x_hlambda * lambda_half_m, ...
+            zeros(numel(slot_x_hlambda), 1), ...
+            slot_z_hlambda * lambda_half_m], ...
+        'element_positions_half_lambda', [ ...
+            slot_x_hlambda, ...
+            zeros(numel(slot_x_hlambda), 1), ...
+            slot_z_hlambda], ...
+        'tx_ids', slot_tx_ids, ...
+        'rx_ids', slot_rx_ids, ...
+        'tx_slot_order', cfg.frame.actual_tx_order(:), ...
+        'channel_order_note', ...
+            '各行与 channel_response(:) 一一对应：每个实际 TX 时隙内按 RX1..RXN 排列。');
+    aoa_cfg.virtual_array_geometry = aoa_cfg.array_geometry;
+    aoa_cfg.canonical_virtual_array_geometry = struct( ...
+        'element_positions_m', [ ...
+            canonical_x_hlambda(:) * lambda_half_m, ...
+            zeros(numel(canonical_x_hlambda), 1), ...
+            canonical_z_hlambda(:) * lambda_half_m], ...
+        'element_positions_half_lambda', [ ...
+            canonical_x_hlambda(:), ...
+            zeros(numel(canonical_x_hlambda), 1), ...
+            canonical_z_hlambda(:)], ...
+        'tx_ids', canonical_tx_ids(:), ...
+        'rx_ids', canonical_rx_ids(:), ...
+        'tx_order', (1:cfg.frame.num_tx).');
 end

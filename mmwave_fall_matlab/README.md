@@ -50,13 +50,14 @@ mmwave_fall_matlab/
 - reads one `.bin` file or a directory of `.bin` files
 - processes every frame up to `rd_cube`
 - returns intermediate results for each frame:
-  `adc_frame_cube`, `mimo_cube`, `range_cube`, `clutter_free_cube`, `rd_cube`, `rd_power_map`, `rd_amplitude_map`
+  `adc_frame_cube`, `mimo_cube`, `range_cube`, `clutter_free_cube`, `rd_cube`, `rd_linear_cube`
+- `rd_linear_cube = abs(rd_cube)` keeps each TX-RX channel separate for per-channel CFAR
 
 `main_visual_demo.m`
 
 - supports a single `.bin` file
 - generates and optionally saves:
-  - RD map
+  - RD map (for display only, summed from `rd_linear_cube`)
   - micro-Doppler map
 
 ## Quick Start
@@ -106,5 +107,4 @@ visual_results = main_visual_demo('F:\Data_bin\parlor\fall\fall_S01_parlor_34_Ra
 - `range_cube`
 - `clutter_free_cube`
 - `rd_cube`
-- `rd_power_map`
-- `rd_amplitude_map`
+- `rd_linear_cube`
